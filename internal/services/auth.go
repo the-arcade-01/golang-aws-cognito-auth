@@ -43,7 +43,7 @@ func (s *AuthService) Login(ctx context.Context, user *models.UserLoginParams) (
 		if errors.As(err, &authErr) {
 			return nil, models.NewErrorResponse(authErr.StatusCode, authErr.Error())
 		}
-		return nil, models.NewErrorResponse(http.StatusInternalServerError, "Authentication failed")
+		return nil, models.NewErrorResponse(http.StatusInternalServerError, err.Error())
 	}
 
 	return models.NewDataResponse(http.StatusOK, res), nil
@@ -56,7 +56,7 @@ func (s *AuthService) ConfirmAccount(ctx context.Context, user *models.UserConfi
 		if errors.As(err, &authErr) {
 			return nil, models.NewErrorResponse(authErr.StatusCode, authErr.Error())
 		}
-		return nil, models.NewErrorResponse(http.StatusInternalServerError, "Failed to confirm account")
+		return nil, models.NewErrorResponse(http.StatusInternalServerError, err.Error())
 	}
 
 	return models.NewDataResponse(http.StatusOK, struct {
@@ -64,4 +64,17 @@ func (s *AuthService) ConfirmAccount(ctx context.Context, user *models.UserConfi
 	}{
 		Message: "Account confirmed successfully.",
 	}), nil
+}
+
+func (s *AuthService) GetUser(ctx context.Context, token string) (*models.DataResponse, *models.ErrorResponse) {
+	res, err := s.store.GetUser(ctx, token)
+	if err != nil {
+		var authErr *appError.AuthError
+		if errors.As(err, &authErr) {
+			return nil, models.NewErrorResponse(authErr.StatusCode, authErr.Error())
+		}
+		return nil, models.NewErrorResponse(http.StatusInternalServerError, err.Error())
+	}
+
+	return models.NewDataResponse(http.StatusOK, res), nil
 }

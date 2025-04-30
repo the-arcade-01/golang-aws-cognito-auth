@@ -58,3 +58,13 @@ func (h *authHandlers) ConfirmAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	models.ResponseWithJSON(w, res.Status, res)
 }
+
+func (h *authHandlers) GetUser(w http.ResponseWriter, r *http.Request) {
+	reqCtx := r.Context().Value(models.RequestContextKey).(*models.RequestContext)
+	res, err := h.svc.GetUser(r.Context(), reqCtx.Token)
+	if err != nil {
+		models.ResponseWithJSON(w, err.Status, err)
+		return
+	}
+	models.ResponseWithJSON(w, res.Status, res)
+}

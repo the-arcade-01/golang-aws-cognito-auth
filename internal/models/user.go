@@ -16,6 +16,11 @@ type UserConfirmationParams struct {
 	Code  string `json:"code"`
 }
 
+type UserInfoResponse struct {
+	Attributes map[string]string `json:"attributes"`
+	Username   string            `json:"username"`
+}
+
 type AuthLoginResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`

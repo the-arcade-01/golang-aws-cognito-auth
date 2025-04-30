@@ -18,6 +18,7 @@ type Config struct {
 	AwsCognitoClientSecret string
 	AwsConfig              aws.Config
 	AwsTokenURL            string
+	AwsJWTIssuerURL        string
 }
 
 func Load() (*Config, error) {
@@ -48,6 +49,7 @@ func Load() (*Config, error) {
 		AwsCognitoClientSecret: v.GetString("AWS_COGNITO_CLIENT_SECRET"),
 		AwsConfig:              awsCfg,
 		AwsTokenURL:            v.GetString("AWS_COGNITO_TOKEN_URL"),
+		AwsJWTIssuerURL:        v.GetString("AWS_COGNITO_JWT_ISSUER_URL"),
 	}
 
 	return cfg, nil

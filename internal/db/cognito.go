@@ -9,11 +9,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 )
 
 type CognitoStore struct {
@@ -21,16 +25,111 @@ type CognitoStore struct {
 	userPoolId   string
 	clientId     string
 	clientSecret string
+	tokenURL     string
+	jwtIssuerURL string
+	jwkSet       jwk.Set
 }
 
-func NewCognitoStore(cfg *config.Config) *CognitoStore {
-	store := &CognitoStore{
+func NewCognitoStore(cfg *config.Config) (*CognitoStore, error) {
+	keySet, err := jwk.Fetch(context.Background(), cfg.AwsTokenURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWK set: %w", err)
+	}
+	return &CognitoStore{
 		userPoolId:   cfg.AwsCognitoUserPoolId,
 		clientId:     cfg.AwsCognitoClientId,
 		clientSecret: cfg.AwsCognitoClientSecret,
+		tokenURL:     cfg.AwsTokenURL,
+		jwtIssuerURL: cfg.AwsJWTIssuerURL,
+		client:       cognitoidentityprovider.NewFromConfig(cfg.AwsConfig),
+		jwkSet:       keySet,
+	}, nil
+}
+
+func (s *CognitoStore) ValidateToken(tokenString string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		kid, ok := token.Header["kid"].(string)
+		if !ok {
+			return nil, errors.New("key ID not found in token")
+		}
+
+		key, found := s.jwkSet.LookupKeyID(kid)
+		if !found {
+			return nil, errors.New("key not found in JWKS")
+		}
+
+		var rawKey interface{}
+		if err := key.Raw(&rawKey); err != nil {
+			return nil, fmt.Errorf("failed to get raw key: %w", err)
+		}
+
+		return rawKey, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", err)
 	}
-	store.client = cognitoidentityprovider.NewFromConfig(cfg.AwsConfig)
-	return store
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token claims")
+	}
+
+	issuer, err := claims.GetIssuer()
+	if err != nil {
+		return nil, errors.New("token has invalid issuer")
+	}
+
+	if strings.Compare(issuer, s.jwtIssuerURL) != 0 {
+		return nil, errors.New("token was not issued by the specified Cognito user pool")
+	}
+
+	return token, nil
+}
+
+func (s *CognitoStore) GetClaims(token *jwt.Token) (map[string]interface{}, error) {
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, errors.New("invalid token claims")
+	}
+	return claims, nil
+}
+
+func (s *CognitoStore) GetUser(ctx context.Context, token string) (*models.UserInfoResponse, error) {
+	output, err := s.client.GetUser(ctx, &cognitoidentityprovider.GetUserInput{
+		AccessToken: aws.String(token),
+	})
+
+	if err != nil {
+		var forbiddenErr *types.ForbiddenException
+		var invalidParamErr *types.InvalidParameterException
+		var notAuthErr *types.NotAuthorizedException
+
+		if errors.As(err, &forbiddenErr) || errors.As(err, &invalidParamErr) || errors.As(err, &notAuthErr) {
+			return nil, appError.NewInvalidInputError(err.Error())
+		}
+
+		slog.ErrorContext(ctx, "Failed to get user info", "err", err)
+		return nil, appError.NewServiceUnavailableError("Unable to fetch user info")
+	}
+
+	attributes, username := output.UserAttributes, output.Username
+	if attributes == nil || username == nil {
+		return nil, appError.NewServiceUnavailableError("Invalid user info result")
+	}
+
+	attributesMap := make(map[string]string)
+	for _, attribute := range attributes {
+		attributesMap[aws.ToString(attribute.Name)] = aws.ToString(attribute.Value)
+	}
+
+	return &models.UserInfoResponse{
+		Attributes: attributesMap,
+		Username:   aws.ToString(username),
+	}, nil
 }
 
 func (s *CognitoStore) SignUp(ctx context.Context, user *models.User) error {
